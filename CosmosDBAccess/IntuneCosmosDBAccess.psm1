@@ -12,7 +12,7 @@
 .NOTES
     Module: IntuneCosmosDBAccess
     Author: Uma Parhar
-    Version: 1.0.0
+    Version: 1.0.1
 #>
 
 # Import required modules and dependencies
