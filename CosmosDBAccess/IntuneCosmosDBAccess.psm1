@@ -155,7 +155,8 @@ function New-IntuneCosmosJitAccess {
         [string]$Environment = "Product",
         [ValidateSet("ReadOnly", "ReadWrite")]
         [string]$AccessType = "ReadOnly",
-        [switch]$ExecuteJitAccess
+        [switch]$ExecuteJitAccess,
+        [switch]$ReAuthenticateAfterJit
     )
 
     try {
@@ -182,10 +183,10 @@ function New-IntuneCosmosJitAccess {
         }
 
         if($PmeAlias){
-            $command = Build-JitAccessCommand -CosmosInfo $cosmosInfo -Justification $Justification -WorkItemId $WorkItemId -PmeAlias $PmeAlias -Environment $Environment -AccessType $AccessType
+            $command = Build-JitAccessCommand -CosmosInfo $cosmosInfo -Justification $Justification -WorkItemId $WorkItemId -PmeAlias $PmeAlias -Environment $Environment -AccessType $AccessType -ReAuthenticateAfterJit:$ReAuthenticateAfterJit
         }
         else{
-            $command = Build-JitAccessCommand -CosmosInfo $cosmosInfo -Justification $Justification -WorkItemId $WorkItemId -PmeObjectId $PmeObjectId -Environment $Environment -AccessType $AccessType
+            $command = Build-JitAccessCommand -CosmosInfo $cosmosInfo -Justification $Justification -WorkItemId $WorkItemId -PmeObjectId $PmeObjectId -Environment $Environment -AccessType $AccessType -ReAuthenticateAfterJit:$ReAuthenticateAfterJit
         }
 
 
@@ -229,6 +230,9 @@ function New-IntuneCosmosJitAccess {
 .PARAMETER WorkItemId
     Work item ID for the JIT request.
 
+.PARAMETER ReAuthenticateAfterJit
+    Clear Azure account cache and re-authenticate after JIT approval.
+
 .EXAMPLE
     Invoke-IntuneE2ECosmosAccess -MicroServiceName "RACerts" -ScaleUnit "AMSUA0101" -Justification "CRI debugging" -WorkItemId "12345678" -PmeAlias "umaparhar"
 
@@ -265,7 +269,8 @@ function Invoke-IntuneE2ECosmosAccess {
         [ValidateSet("ReadOnly", "ReadWrite")]
         [string]$AccessType = "ReadOnly",
         [switch]$ExecuteJitAccess,
-        [switch]$AssignAzureRoles
+        [switch]$AssignAzureRoles,
+        [switch]$ReAuthenticateAfterJit
     )
 
     try {
@@ -288,14 +293,14 @@ function Invoke-IntuneE2ECosmosAccess {
         # Generate JIT commands
         Write-Host "Generating JIT request command..."
         if ($PmeAlias) {
-            $jitCommand = New-IntuneCosmosJitAccess -InventoryData $inventoryData -Justification $Justification -WorkItemId $WorkItemId -PmeAlias $PmeAlias -AccessType $AccessType
+            $jitCommand = New-IntuneCosmosJitAccess -InventoryData $inventoryData -Justification $Justification -WorkItemId $WorkItemId -PmeAlias $PmeAlias -AccessType $AccessType -ReAuthenticateAfterJit:$ReAuthenticateAfterJit
         }
         else{
             if (-not $PmeObjectId) {
                 Write-Warning "PME Object ID / PME alias not provided. Cannot generate JIT access command."
                 return
             }
-            $jitCommand = New-IntuneCosmosJitAccess -InventoryData $inventoryData -Justification $Justification -WorkItemId $WorkItemId -PmeObjectId $PmeObjectId -AccessType $AccessType
+            $jitCommand = New-IntuneCosmosJitAccess -InventoryData $inventoryData -Justification $Justification -WorkItemId $WorkItemId -PmeObjectId $PmeObjectId -AccessType $AccessType -ReAuthenticateAfterJit:$ReAuthenticateAfterJit
         }
         if (-not($jitCommand.Count -eq 1)) {
             Write-Warning "Generated $($jitCommands.Count) JIT access command(s). Expected One." -ForegroundColor Green
@@ -307,7 +312,7 @@ function Invoke-IntuneE2ECosmosAccess {
             Write-Host "Executing JIT access requests..." -ForegroundColor Yellow
 
             # Determine if we should skip role assignment in the Get-CosmosDB functions
-            $skipRoleAssignment = $AssignAzureRoles
+            $skipRoleAssignment = -not $AssignAzureRoles
 
             $jitResults = @()
             try {
@@ -571,14 +576,16 @@ function Build-JitAccessCommand {
         [string]$PmeObjectId,
         [string]$Environment = "Product",
         [ValidateSet("ReadOnly", "ReadWrite")]
-        [string]$AccessType = "ReadOnly"
+        [string]$AccessType = "ReadOnly",
+        [switch]$ReAuthenticateAfterJit
     )
 
     $functionName = if ($AccessType -eq "ReadWrite") { "Get-CosmosDBWriteAccess" } else { "Get-CosmosDBReadAccess" }
+    $reAuthFlag = if ($ReAuthenticateAfterJit) { "-ReAuthenticateAfterJit" } else { "" }
     if ($PmeObjectId){
-        return "$functionName -SubscriptionId $($CosmosInfo.SubscriptionId) -CosmosDbAccountName $($CosmosInfo.AccountName) -ResourceGroupName $($CosmosInfo.ResourceGroupName) -Justification `"$Justification`" -Env `"$Environment`" -Src Other -Wid $WorkItemId -PmeObjectId $PmeObjectId"
+        return "$functionName -SubscriptionId $($CosmosInfo.SubscriptionId) -CosmosDbAccountName $($CosmosInfo.AccountName) -ResourceGroupName $($CosmosInfo.ResourceGroupName) -Justification `"$Justification`" -Env `"$Environment`" -Src Other -Wid $WorkItemId -PmeObjectId $PmeObjectId $reAuthFlag"
     }
-    return "$functionName -SubscriptionId $($CosmosInfo.SubscriptionId) -CosmosDbAccountName $($CosmosInfo.AccountName) -ResourceGroupName $($CosmosInfo.ResourceGroupName) -Justification `"$Justification`" -Env `"$Environment`" -Src Other -Wid $WorkItemId -PmeAlias $PmeAlias"
+    return "$functionName -SubscriptionId $($CosmosInfo.SubscriptionId) -CosmosDbAccountName $($CosmosInfo.AccountName) -ResourceGroupName $($CosmosInfo.ResourceGroupName) -Justification `"$Justification`" -Env `"$Environment`" -Src Other -Wid $WorkItemId -PmeAlias $PmeAlias $reAuthFlag"
 }
 
 function Wait-ForJitApproval {
@@ -810,7 +817,8 @@ function Get-CosmosDBReadAccess {
         [Parameter(Mandatory)]
         [string]$Wid,
         # Skip role assignment flag
-        [switch]$SkipRoleAssignment
+        [switch]$SkipRoleAssignment,
+        [switch]$ReAuthenticateAfterJit
     )
 
     try {
@@ -865,14 +873,24 @@ function Get-CosmosDBReadAccess {
         while ($attempt -lt $maxAttempts) {
             $jitStatus = $null
             try {
-                $jitStatus = Get-JITRequest -env $Env -RequestId $requestId -ver "2015-09-07.1.0"
+                $jitStatus = Get-JITRequest -env $Env -RequestId $requestId -ver "2015-09-07.1.0" -includeStateTransition
             }
             catch {
                 Write-Warning "Failed to get JIT request status. Retrying..."
             }
-            if ($jitStatus -and $jitStatus.Approver) {
+            if ($jitStatus -and ($jitStatus.Approver -or $jitStatus.StateTransitionRecords.phase[0] -eq 'Granted')) {
                 Write-Host "JIT access approved!" -ForegroundColor Green
                 $approved = $true
+                if ($ReAuthenticateAfterJit) {
+                        Write-Host "Re-authenticating with Azure after JIT approval..." -ForegroundColor Yellow
+                        try {
+                            az account clear
+                            az login
+                        }
+                        catch {
+                            Write-Warning "Failed to re-authenticate with Azure: $($_.Exception.Message)"
+                        }
+                    }
                 break
             }
             else {
@@ -1028,7 +1046,8 @@ function Get-CosmosDBWriteAccess {
         [string]$Src,
         [Parameter(Mandatory)]
         [string]$Wid,
-        [switch]$SkipRoleAssignment
+        [switch]$SkipRoleAssignment,
+        [switch]$ReAuthenticateAfterJit
     )
 
     try {
@@ -1083,14 +1102,24 @@ function Get-CosmosDBWriteAccess {
         while ($attempt -lt $maxAttempts) {
             $jitStatus = $null
             try {
-                $jitStatus = Get-JITRequest -env $Env -RequestId $requestId -ver "2015-09-07.1.0"
+                $jitStatus = Get-JITRequest -env $Env -RequestId $requestId -ver "2015-09-07.1.0" -includeStateTransition
             }
             catch {
                 Write-Warning "Failed to get JIT request status. Retrying..."
             }
-            if ($jitStatus -and $jitStatus.Approver) {
+            if ($jitStatus -and ($jitStatus.Approver -or $jitStatus.StateTransitionRecords.phase[0] -eq 'Granted')) {
                 Write-Host "JIT access approved!" -ForegroundColor Green
                 $approved = $true
+                if ($ReAuthenticateAfterJit) {
+                        Write-Host "Re-authenticating with Azure after JIT approval..." -ForegroundColor Yellow
+                        try {
+                            az account clear
+                            az login
+                        }
+                        catch {
+                            Write-Warning "Failed to re-authenticate with Azure: $($_.Exception.Message)"
+                        }
+                    }
                 break
             }
             else {
