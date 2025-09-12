@@ -12,7 +12,7 @@
 .NOTES
     Module: IntuneCosmosDBAccess
     Author: Uma Parhar
-    Version: 1.0.2
+    Version: 1.0.3
 #>
 
 # Import required modules and dependencies
@@ -1288,27 +1288,21 @@ function Revoke-CosmosDBAccess {
         if (-not $PmeObjectId) { return }
     }
     # Query the role assignment ID based on the PME Object ID
-    $roleAssignmentCommand = @(
-        'az cosmosdb sql role assignment list',
-        '--account-name `"$CosmosDbAccountName`"',
-        '--resource-group `"$ResourceGroupName`"',
-        "--query '[?principalId=='$pmeObjectId'].id | [0]'",
-        '-o tsv'
-    ) -join ' '
-    $roleAssignmentId = Invoke-Expression $roleAssignmentCommand
+    Write-Host "Querying role assignments for PME Object ID: $PmeObjectId" -ForegroundColor Yellow
+    $query = "[?principalId=='$PmeObjectId'].id | [0]"
+    $roleAssignmentId = az cosmosdb sql role assignment list --account-name $CosmosDbAccountName --resource-group $ResourceGroupName --query $query -o tsv
+
     if (-not $roleAssignmentId) {
-        Write-Error 'Failed to retrieve the role assignment ID for PME Object ID: $pmeObjectId'
+        Write-Error "Failed to retrieve the role assignment ID for PME Object ID: $PmeObjectId"
         return
     }
-    $command = @(
-        'az cosmosdb sql role assignment delete',
-        '--account-name $CosmosDbAccountName',
-        '--resource-group $ResourceGroupName',
-        '--role-assignment-id $roleAssignmentId'
-    ) -join ' '
-    Write-Host 'Running the following command:' -ForegroundColor Green
-    Write-Host $command
-    Invoke-Expression $command
+
+    Write-Host "Found role assignment ID: $roleAssignmentId" -ForegroundColor Green
+
+    # Delete the role assignment
+    Write-Host "Deleting role assignment..." -ForegroundColor Yellow
+    az cosmosdb sql role assignment delete --account-name $CosmosDbAccountName --resource-group $ResourceGroupName --role-assignment-id $roleAssignmentId
+
 }
 
 #endregion
